@@ -1,6 +1,50 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# --- 1. C# ACCELERATOR (High Performance Image Extraction) ---
+$csharpSource = @"
+using System;
+using System.IO;
+
+public class BitmapExtractor {
+    public static bool Extract(string inputFile, string outputFile) {
+        if (!File.Exists(inputFile)) return false;
+
+        try {
+            byte[] bytes = File.ReadAllBytes(inputFile);
+            // DQB2 CMNDAT.BIN Offset Logic
+            int startOffset = 269;
+            int width = 320;
+            int height = 180;
+            int pixelSize = 3; // BGR24
+            int imgSize = width * height * pixelSize;
+
+            if (bytes.Length < startOffset + imgSize) return false;
+
+            // Construct BMP Header (54 bytes)
+            int fileSize = 54 + imgSize;
+            byte[] header = new byte[54];
+            header[0] = 0x42; // B
+            header[1] = 0x4D; // M
+            BitConverter.GetBytes(fileSize).CopyTo(header, 2);
+            BitConverter.GetBytes(54).CopyTo(header, 10);
+            BitConverter.GetBytes(40).CopyTo(header, 14);
+            BitConverter.GetBytes(width).CopyTo(header, 18);
+            BitConverter.GetBytes(-height).CopyTo(header, 22); // Negative for Top-Down
+            BitConverter.GetBytes((short)1).CopyTo(header, 26);
+            BitConverter.GetBytes((short)24).CopyTo(header, 28);
+
+            using (FileStream fs = new FileStream(outputFile, FileMode.Create)) {
+                fs.Write(header, 0, 54);
+                fs.Write(bytes, startOffset, imgSize);
+            }
+            return true;
+        } catch { return false; }
+    }
+}
+"@
+Add-Type -TypeDefinition $csharpSource -Language CSharp
+
 # --- NUCLEAR PATH DETECTION ---
 try {
     if ($PSScriptRoot) {
@@ -41,53 +85,11 @@ if (-not $gameSavePath) { $gameSavePath = "C:\" }
 
 $slots = @{ "Slot 1" = "B00"; "Slot 2" = "B01"; "Slot 3" = "B02" }
 
-# --- EXTRACTION ENGINE (RAW BITMAP) ---
-function Extract-RawImage($folderPath, $destPath) {
-    $filePath = Join-Path $folderPath "CMNDAT.BIN"
-    if (-not (Test-Path $filePath)) { return $false }
-
-    try {
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        
-        # Source Code Offset: 0x10D = 269
-        $startOffset = 269
-        $width = 320
-        $height = 180
-        $pixelSize = 3 # BGR24
-        $imgSize = $width * $height * $pixelSize # 172,800 bytes
-        
-        if ($bytes.Length -lt ($startOffset + $imgSize)) { return $false }
-
-        # 1. Extract Raw Pixels
-        $rawPixels = New-Object byte[] $imgSize
-        [Array]::Copy($bytes, $startOffset, $rawPixels, 0, $imgSize)
-        
-        # 2. Construct BMP Header (54 bytes)
-        $fileSize = 54 + $imgSize
-        $header = New-Object byte[] 54
-        
-        $header[0] = 0x42 # B
-        $header[1] = 0x4D # M
-        [BitConverter]::GetBytes([int]$fileSize).CopyTo($header, 2)
-        [BitConverter]::GetBytes([int]54).CopyTo($header, 10) # Data Offset
-        [BitConverter]::GetBytes([int]40).CopyTo($header, 14) # Header Size
-        [BitConverter]::GetBytes([int]$width).CopyTo($header, 18)
-        [BitConverter]::GetBytes([int]($height * -1)).CopyTo($header, 22) # Negative Height (Top-Down)
-        [BitConverter]::GetBytes([int16]1).CopyTo($header, 26)  # Planes
-        [BitConverter]::GetBytes([int16]24).CopyTo($header, 28) # Bit Count
-        
-        # 3. Combine & Save
-        $finalBmp = $header + $rawPixels
-        [System.IO.File]::WriteAllBytes($destPath, $finalBmp)
-        
-        return $true
-    } catch { return $false }
-}
-
-# --- GUI ---
+# --- GUI SETUP ---
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "DQB2 Save Manager"
-$form.Size = New-Object System.Drawing.Size(850, 600)
+# INCREASED HEIGHT to 680 to fix cut-off buttons
+$form.Size = New-Object System.Drawing.Size(850, 680)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
@@ -96,13 +98,15 @@ $form.BackColor = "#F4F4F9"
 $grpLive = New-Object System.Windows.Forms.GroupBox
 $grpLive.Text = "Active Game Slots"
 $grpLive.Location = New-Object System.Drawing.Point(15, 15)
-$grpLive.Size = New-Object System.Drawing.Size(400, 530)
+# INCREASED HEIGHT to 550 for better padding
+$grpLive.Size = New-Object System.Drawing.Size(400, 550)
 [void]$form.Controls.Add($grpLive)
 
 $grpArc = New-Object System.Windows.Forms.GroupBox
 $grpArc.Text = "Archive Library (Right-Click for Options)"
 $grpArc.Location = New-Object System.Drawing.Point(430, 15)
-$grpArc.Size = New-Object System.Drawing.Size(390, 530)
+# INCREASED HEIGHT to 550 for better padding
+$grpArc.Size = New-Object System.Drawing.Size(390, 550)
 [void]$form.Controls.Add($grpArc)
 
 $lstArchive = New-Object System.Windows.Forms.ListBox
@@ -110,7 +114,7 @@ $lstArchive.Location = New-Object System.Drawing.Point(15, 30)
 $lstArchive.Size = New-Object System.Drawing.Size(360, 250)
 [void]$grpArc.Controls.Add($lstArchive)
 
-# --- CONTEXT MENU (RIGHT CLICK) ---
+# --- CONTEXT MENU ---
 $ctxMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $itemRename = $ctxMenu.Items.Add("Rename")
 $itemRegen = $ctxMenu.Items.Add("Regenerate Image")
@@ -125,6 +129,14 @@ $picPreview.BorderStyle = "FixedSingle"
 $picPreview.SizeMode = "Zoom"
 $picPreview.BackColor = "#000000"
 [void]$grpArc.Controls.Add($picPreview)
+
+# --- HELPER: GET CLEAN NAME ---
+# Removes the timestamp " | Jan 03..." from the listbox selection to get the real folder name
+function Get-RealName($selection) {
+    if (-not $selection) { return $null }
+    # Split by " | " and take the first part
+    return ($selection -split " \| ")[0]
+}
 
 # --- LOGIC ---
 function Refresh-UI {
@@ -168,9 +180,8 @@ function Refresh-UI {
 
             $tempImg = Join-Path $tempPath "$key.bmp"
             
-            # Auto-Extract if missing
             if (-not (Test-Path $tempImg)) {
-                 Extract-RawImage $fullPath $tempImg | Out-Null
+                 [BitmapExtractor]::Extract("$fullPath\CMNDAT.BIN", $tempImg) | Out-Null
             }
             if (Test-Path $tempImg) { $livePic.ImageLocation = $tempImg }
 
@@ -194,10 +205,13 @@ function Refresh-UI {
         }
     }
 
+    # REFRESH LISTBOX WITH IMPROVED TIMESTAMPS
     $lstArchive.Items.Clear()
-    $dirs = Get-ChildItem -Path $archivePath -Directory
+    $dirs = Get-ChildItem -Path $archivePath -Directory | Sort-Object LastWriteTime -Descending
     foreach ($d in $dirs) { 
-        [void]$lstArchive.Items.Add($d.Name) 
+        # New Friendly Format: "My Save | Jan 03, 2026 @ 1:16 PM"
+        $display = "$($d.Name) | $($d.LastWriteTime.ToString('MMM dd, yyyy @ h:mm tt'))"
+        [void]$lstArchive.Items.Add($display) 
     }
     $picPreview.Image = $null
 }
@@ -207,28 +221,39 @@ function Backup-Process($slotName) {
     $name = [Microsoft.VisualBasic.Interaction]::InputBox("Name this save:", "Backup", "My Save")
     if (-not $name) { return }
     
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+
     $dest = Join-Path $archivePath $name
     if (Test-Path $dest) { 
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
         $res = [System.Windows.Forms.MessageBox]::Show("Backup '$name' already exists.`nOverwrite it?", "Confirm Overwrite", "YesNo", "Warning")
         if ($res -eq "No") { return }
-        try { Remove-Item -Path $dest -Recurse -Force } catch { return }
+        $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        try { Remove-Item -Path $dest -Recurse -Force } catch { 
+            $form.Cursor = [System.Windows.Forms.Cursors]::Default
+            return 
+        }
     }
     
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
     $src = Join-Path $gameSavePath $slots[$slotName]
     Copy-Item -Path "$src\*" -Destination $dest -Recurse
     
-    # Extract Preview
     $archiveImg = Join-Path $dest "preview.bmp"
-    Extract-RawImage $dest $archiveImg | Out-Null
+    [BitmapExtractor]::Extract("$dest\CMNDAT.BIN", $archiveImg) | Out-Null
+    
     Refresh-UI
+    $form.Cursor = [System.Windows.Forms.Cursors]::Default
 }
 
 function Restore-Process($targetSlot) {
-    $sel = $lstArchive.SelectedItem
+    $rawSel = $lstArchive.SelectedItem
+    $sel = Get-RealName $rawSel
     if (-not $sel) { return }
     
     if ([System.Windows.Forms.MessageBox]::Show("Overwrite $targetSlot with '$sel'?", "Confirm", "YesNo", "Warning") -eq "Yes") {
+        $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+
         $src = Join-Path $archivePath $sel
         $dest = Join-Path $gameSavePath $slots[$targetSlot]
         
@@ -241,13 +266,14 @@ function Restore-Process($targetSlot) {
         $livePreview = Join-Path $tempPath "$targetSlot.bmp"
         if (Test-Path $archivePreview) { Copy-Item -Path $archivePreview -Destination $livePreview -Force }
         
-        [System.Windows.Forms.MessageBox]::Show("Restored!")
         Refresh-UI
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        [System.Windows.Forms.MessageBox]::Show("Restored!")
     }
 }
 
 function Delete-Archive {
-    $sel = $lstArchive.SelectedItem
+    $sel = Get-RealName $lstArchive.SelectedItem
     if ($sel) {
         if ([System.Windows.Forms.MessageBox]::Show("Delete '$sel'?", "Confirm", "YesNo") -eq "Yes") {
             try {
@@ -259,7 +285,7 @@ function Delete-Archive {
 }
 
 function Rename-Archive {
-    $sel = $lstArchive.SelectedItem
+    $sel = Get-RealName $lstArchive.SelectedItem
     if (-not $sel) { return }
     
     $newName = [Microsoft.VisualBasic.Interaction]::InputBox("Enter new name:", "Rename Backup", $sel)
@@ -282,16 +308,15 @@ function Rename-Archive {
 }
 
 function Regenerate-Image {
-    $sel = $lstArchive.SelectedItem
+    $sel = Get-RealName $lstArchive.SelectedItem
     if (-not $sel) { return }
     
     $path = Join-Path $archivePath $sel
     $img = Join-Path $path "preview.bmp"
     
-    $success = Extract-RawImage $path $img
+    $success = [BitmapExtractor]::Extract("$path\CMNDAT.BIN", $img)
     
     if ($success) {
-        # Force refresh the picture box
         $picPreview.ImageLocation = $img
         [System.Windows.Forms.MessageBox]::Show("Image regenerated successfully!", "Success")
     } else {
@@ -304,22 +329,35 @@ $itemRename.Add_Click({ Rename-Archive })
 $itemDelete.Add_Click({ Delete-Archive })
 $itemRegen.Add_Click({ Regenerate-Image })
 
-# --- BUTTONS ---
+# --- RESTORE BUTTONS ---
 $btnR1 = New-Object System.Windows.Forms.Button; $btnR1.Text="Restore to Slot 1"; $btnR1.Location=New-Object System.Drawing.Point(15,500); $btnR1.Size=New-Object System.Drawing.Size(110,30); $btnR1.Add_Click({Restore-Process "Slot 1"}); [void]$grpArc.Controls.Add($btnR1)
 $btnR2 = New-Object System.Windows.Forms.Button; $btnR2.Text="Restore to Slot 2"; $btnR2.Location=New-Object System.Drawing.Point(135,500); $btnR2.Size=New-Object System.Drawing.Size(110,30); $btnR2.Add_Click({Restore-Process "Slot 2"}); [void]$grpArc.Controls.Add($btnR2)
 $btnR3 = New-Object System.Windows.Forms.Button; $btnR3.Text="Restore to Slot 3"; $btnR3.Location=New-Object System.Drawing.Point(255,500); $btnR3.Size=New-Object System.Drawing.Size(110,30); $btnR3.Add_Click({Restore-Process "Slot 3"}); [void]$grpArc.Controls.Add($btnR3)
 
+# --- UTILITY BUTTONS ---
 $btnDel = New-Object System.Windows.Forms.Button; $btnDel.Text="X"; $btnDel.ForeColor="Red"; $btnDel.Location=New-Object System.Drawing.Point(340,30); $btnDel.Size=New-Object System.Drawing.Size(35,25); $btnDel.Add_Click({Delete-Archive}); [void]$grpArc.Controls.Add($btnDel)
+
+# 3. UPDATED Location for 'Open Folder' Button (Moved down to 580)
+$btnOpenFolder = New-Object System.Windows.Forms.Button
+$btnOpenFolder.Text = "Open Save Folder"
+$btnOpenFolder.Location = New-Object System.Drawing.Point(430, 580)
+$btnOpenFolder.Size = New-Object System.Drawing.Size(150, 30)
+$btnOpenFolder.Add_Click({
+    if (Test-Path $gameSavePath) { Invoke-Item $gameSavePath }
+    else { [System.Windows.Forms.MessageBox]::Show("Game path not found.") }
+})
+[void]$form.Controls.Add($btnOpenFolder)
 
 # --- LIST SELECTION CHANGE ---
 $lstArchive.Add_SelectedIndexChanged({
-    if ($lstArchive.SelectedItem) {
-        $img = Join-Path $archivePath "$($lstArchive.SelectedItem)\preview.bmp"
+    $sel = Get-RealName $lstArchive.SelectedItem
+    if ($sel) {
+        $img = Join-Path $archivePath "$sel\preview.bmp"
         if (Test-Path $img) { $picPreview.ImageLocation = $img } else { $picPreview.Image = $null }
     }
 })
 
-# Make right-click select the item first (UX improvement)
+# Make right-click select the item first
 $lstArchive.Add_MouseDown({
     param($sender, $e)
     if ($e.Button -eq 'Right') {
