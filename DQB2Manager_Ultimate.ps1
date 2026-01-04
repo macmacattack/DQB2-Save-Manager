@@ -1,3 +1,4 @@
+# v1.2 Release
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
