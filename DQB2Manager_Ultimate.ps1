@@ -1,4 +1,4 @@
-# v1.3 Release - Added Game Safety Checks
+# v1.6.3 Release - UI Polish (Fixed Text Overlap)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -88,8 +88,8 @@ $slots = @{ "Slot 1" = "B00"; "Slot 2" = "B01"; "Slot 3" = "B02" }
 
 # --- GUI SETUP ---
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "DQB2 Save Manager v1.3"
-$form.Size = New-Object System.Drawing.Size(850, 680)
+$form.Text = "DQB2 Save Manager v1.6.3"
+$form.Size = New-Object System.Drawing.Size(870, 750)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
@@ -98,18 +98,18 @@ $form.BackColor = "#F4F4F9"
 $grpLive = New-Object System.Windows.Forms.GroupBox
 $grpLive.Text = "Active Game Slots"
 $grpLive.Location = New-Object System.Drawing.Point(15, 15)
-$grpLive.Size = New-Object System.Drawing.Size(400, 550)
+$grpLive.Size = New-Object System.Drawing.Size(400, 600)
 [void]$form.Controls.Add($grpLive)
 
 $grpArc = New-Object System.Windows.Forms.GroupBox
 $grpArc.Text = "Archive Library (Right-Click for Options)"
 $grpArc.Location = New-Object System.Drawing.Point(430, 15)
-$grpArc.Size = New-Object System.Drawing.Size(390, 550)
+$grpArc.Size = New-Object System.Drawing.Size(405, 600)
 [void]$form.Controls.Add($grpArc)
 
 $lstArchive = New-Object System.Windows.Forms.ListBox
 $lstArchive.Location = New-Object System.Drawing.Point(15, 30)
-$lstArchive.Size = New-Object System.Drawing.Size(360, 250)
+$lstArchive.Size = New-Object System.Drawing.Size(375, 250)
 [void]$grpArc.Controls.Add($lstArchive)
 
 # --- CONTEXT MENU ---
@@ -122,11 +122,51 @@ $lstArchive.ContextMenuStrip = $ctxMenu
 
 $picPreview = New-Object System.Windows.Forms.PictureBox
 $picPreview.Location = New-Object System.Drawing.Point(15, 290)
-$picPreview.Size = New-Object System.Drawing.Size(360, 200)
+$picPreview.Size = New-Object System.Drawing.Size(375, 150)
 $picPreview.BorderStyle = "FixedSingle"
 $picPreview.SizeMode = "Zoom"
 $picPreview.BackColor = "#000000"
 [void]$grpArc.Controls.Add($picPreview)
+
+# --- NEW ALBUM OPTIONS ---
+$grpOptions = New-Object System.Windows.Forms.GroupBox
+$grpOptions.Text = "Album Options (SCSHDAT.BIN)"
+$grpOptions.Location = New-Object System.Drawing.Point(15, 450)
+$grpOptions.Size = New-Object System.Drawing.Size(375, 90)
+[void]$grpArc.Controls.Add($grpOptions)
+
+# Backup Option (Left Column)
+$chkBackupAlbum = New-Object System.Windows.Forms.CheckBox
+$chkBackupAlbum.Text = "Include in Backup"
+$chkBackupAlbum.Checked = $true
+$chkBackupAlbum.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chkBackupAlbum.Location = New-Object System.Drawing.Point(10, 25)
+$chkBackupAlbum.Size = New-Object System.Drawing.Size(150, 20)
+[void]$grpOptions.Controls.Add($chkBackupAlbum)
+
+$lblBackupDesc = New-Object System.Windows.Forms.Label
+$lblBackupDesc.Text = "Saves your photos with this backup."
+$lblBackupDesc.ForeColor = "Gray"
+$lblBackupDesc.Location = New-Object System.Drawing.Point(27, 45)
+$lblBackupDesc.Size = New-Object System.Drawing.Size(155, 30) # Reduced width to prevent overlap
+[void]$grpOptions.Controls.Add($lblBackupDesc)
+
+# Restore Option (Right Column - Shifted Right)
+$chkRestoreAlbum = New-Object System.Windows.Forms.CheckBox
+$chkRestoreAlbum.Text = "Overwrite on Restore"
+$chkRestoreAlbum.Checked = $true
+$chkRestoreAlbum.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chkRestoreAlbum.Location = New-Object System.Drawing.Point(190, 25) # Shifted to 190
+$chkRestoreAlbum.Size = New-Object System.Drawing.Size(180, 20)
+[void]$grpOptions.Controls.Add($chkRestoreAlbum)
+
+$lblRestoreDesc = New-Object System.Windows.Forms.Label
+$lblRestoreDesc.Text = "Warning: Replaces current album."
+$lblRestoreDesc.ForeColor = "Red"
+$lblRestoreDesc.Location = New-Object System.Drawing.Point(207, 45) # Shifted to 207 (aligned with checkbox)
+$lblRestoreDesc.Size = New-Object System.Drawing.Size(160, 30)
+[void]$grpOptions.Controls.Add($lblRestoreDesc)
+
 
 # --- HELPER: GET CLEAN NAME ---
 function Get-RealName($selection) {
@@ -242,7 +282,14 @@ function Backup-Process($slotName) {
     
     New-Item -ItemType Directory -Path $dest -Force | Out-Null
     $src = Join-Path $gameSavePath $slots[$slotName]
-    Copy-Item -Path "$src\*" -Destination $dest -Recurse
+    
+    # --- SPLIT LOGIC: BACKUP ---
+    if ($chkBackupAlbum.Checked) {
+        Copy-Item -Path "$src\*" -Destination $dest -Recurse
+    } else {
+        # Exclude SCSHDAT.BIN if unchecked
+        Get-ChildItem -Path $src -Exclude "SCSHDAT.BIN" | Copy-Item -Destination $dest -Recurse
+    }
     
     $archiveImg = Join-Path $dest "preview.bmp"
     [BitmapExtractor]::Extract("$dest\CMNDAT.BIN", $archiveImg) | Out-Null
@@ -257,16 +304,41 @@ function Restore-Process($targetSlot) {
     $sel = Get-RealName $rawSel
     if (-not $sel) { return }
     
-    if ([System.Windows.Forms.MessageBox]::Show("Overwrite $targetSlot with '$sel'?", "Confirm", "YesNo", "Warning") -eq "Yes") {
+    # --- DYNAMIC WARNING MESSAGE ---
+    $confirmMsg = "Restore '$sel' to $targetSlot?"
+    
+    if ($chkRestoreAlbum.Checked) {
+        $confirmMsg += "`n`nWARNING: This will OVERWRITE your current Photo Album with the one from the backup."
+        $confirmMsg += "`n(Uncheck 'Overwrite on Restore' to keep your current album)."
+    } else {
+        $confirmMsg += "`n`nNOTE: Your current Photo Album will be PRESERVED (Global Album Mode)."
+    }
+
+    if ([System.Windows.Forms.MessageBox]::Show($confirmMsg, "Confirm Restore", "YesNo", "Warning") -eq "Yes") {
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
 
         $src = Join-Path $archivePath $sel
         $dest = Join-Path $gameSavePath $slots[$targetSlot]
         
-        if (Test-Path $dest) { Remove-Item -Path $dest -Recurse -Force }
-        New-Item -ItemType Directory -Path $dest -Force | Out-Null
-        
-        Get-ChildItem -Path $src -Exclude "preview.bmp" | Copy-Item -Destination $dest -Recurse
+        # --- SPLIT LOGIC: RESTORE ---
+        if ($chkRestoreAlbum.Checked) {
+             # OVERWRITE MODE: Nuclear Wipe (Standard)
+             if (Test-Path $dest) { Remove-Item -Path $dest -Recurse -Force }
+             New-Item -ItemType Directory -Path $dest -Force | Out-Null
+             
+             Get-ChildItem -Path $src -Exclude "preview.bmp" | Copy-Item -Destination $dest -Recurse
+        } 
+        else {
+             # PRESERVE MODE: Delete everything EXCEPT SCSHDAT.BIN
+             if (Test-Path $dest) {
+                 Get-ChildItem -Path $dest | Where-Object { $_.Name -ne "SCSHDAT.BIN" } | Remove-Item -Recurse -Force
+             }
+             if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+             
+             # Copy everything EXCEPT SCSHDAT.BIN (and preview.bmp)
+             $excludes = @("preview.bmp", "SCSHDAT.BIN")
+             Get-ChildItem -Path $src -Exclude $excludes | Copy-Item -Destination $dest -Recurse
+        }
         
         $archivePreview = Join-Path $src "preview.bmp"
         $livePreview = Join-Path $tempPath "$targetSlot.bmp"
@@ -336,16 +408,17 @@ $itemDelete.Add_Click({ Delete-Archive })
 $itemRegen.Add_Click({ Regenerate-Image })
 
 # --- RESTORE BUTTONS ---
-$btnR1 = New-Object System.Windows.Forms.Button; $btnR1.Text="Restore to Slot 1"; $btnR1.Location=New-Object System.Drawing.Point(15,500); $btnR1.Size=New-Object System.Drawing.Size(110,30); $btnR1.Add_Click({Restore-Process "Slot 1"}); [void]$grpArc.Controls.Add($btnR1)
-$btnR2 = New-Object System.Windows.Forms.Button; $btnR2.Text="Restore to Slot 2"; $btnR2.Location=New-Object System.Drawing.Point(135,500); $btnR2.Size=New-Object System.Drawing.Size(110,30); $btnR2.Add_Click({Restore-Process "Slot 2"}); [void]$grpArc.Controls.Add($btnR2)
-$btnR3 = New-Object System.Windows.Forms.Button; $btnR3.Text="Restore to Slot 3"; $btnR3.Location=New-Object System.Drawing.Point(255,500); $btnR3.Size=New-Object System.Drawing.Size(110,30); $btnR3.Add_Click({Restore-Process "Slot 3"}); [void]$grpArc.Controls.Add($btnR3)
+$btnR1 = New-Object System.Windows.Forms.Button; $btnR1.Text="Restore to Slot 1"; $btnR1.Location=New-Object System.Drawing.Point(15,560); $btnR1.Size=New-Object System.Drawing.Size(115,30); $btnR1.Add_Click({Restore-Process "Slot 1"}); [void]$grpArc.Controls.Add($btnR1)
+$btnR2 = New-Object System.Windows.Forms.Button; $btnR2.Text="Restore to Slot 2"; $btnR2.Location=New-Object System.Drawing.Point(145,560); $btnR2.Size=New-Object System.Drawing.Size(115,30); $btnR2.Add_Click({Restore-Process "Slot 2"}); [void]$grpArc.Controls.Add($btnR2)
+$btnR3 = New-Object System.Windows.Forms.Button; $btnR3.Text="Restore to Slot 3"; $btnR3.Location=New-Object System.Drawing.Point(275,560); $btnR3.Size=New-Object System.Drawing.Size(115,30); $btnR3.Add_Click({Restore-Process "Slot 3"}); [void]$grpArc.Controls.Add($btnR3)
 
 # --- UTILITY BUTTONS ---
-$btnDel = New-Object System.Windows.Forms.Button; $btnDel.Text="X"; $btnDel.ForeColor="Red"; $btnDel.Location=New-Object System.Drawing.Point(340,30); $btnDel.Size=New-Object System.Drawing.Size(35,25); $btnDel.Add_Click({Delete-Archive}); [void]$grpArc.Controls.Add($btnDel)
+$btnDel = New-Object System.Windows.Forms.Button; $btnDel.Text="X"; $btnDel.ForeColor="Red"; $btnDel.Location=New-Object System.Drawing.Point(355,30); $btnDel.Size=New-Object System.Drawing.Size(35,25); $btnDel.Add_Click({Delete-Archive}); [void]$grpArc.Controls.Add($btnDel)
 
+# --- OPEN FOLDER BUTTON ---
 $btnOpenFolder = New-Object System.Windows.Forms.Button
 $btnOpenFolder.Text = "Open Save Folder"
-$btnOpenFolder.Location = New-Object System.Drawing.Point(430, 580)
+$btnOpenFolder.Location = New-Object System.Drawing.Point(558, 630)
 $btnOpenFolder.Size = New-Object System.Drawing.Size(150, 30)
 $btnOpenFolder.Add_Click({
     if (Test-Path $gameSavePath) { Invoke-Item $gameSavePath }
