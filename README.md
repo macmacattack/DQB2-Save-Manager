@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # DQB2 Save Manager
 
 A lightweight PowerShell application to manage, backup, restore, and organize *Dragon Quest Builders 2* save games on PC (Steam). It includes a raw image extractor to view save file thumbnails directly in the app.
@@ -74,4 +73,4 @@ A lightweight PowerShell application to backup, restore, and organize *Dragon Qu
 
 ## Credits & References
 * **Save Data Image Logic:** Huge thanks to [turtle-insect/DQB2](https://github.com/turtle-insect/DQB2). Their analysis of the `CMNDAT.BIN` header structure and bitmap offsets was essential for the image extraction logic used in this tool.
->>>>>>> f81fe9bb974a8ffc78a41fcee1751df9e1bc510b
+
