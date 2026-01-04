@@ -1,4 +1,4 @@
-# v1.2 Release
+# v1.3 Release - Added Game Safety Checks
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -88,8 +88,7 @@ $slots = @{ "Slot 1" = "B00"; "Slot 2" = "B01"; "Slot 3" = "B02" }
 
 # --- GUI SETUP ---
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "DQB2 Save Manager"
-# INCREASED HEIGHT to 680 to fix cut-off buttons
+$form.Text = "DQB2 Save Manager v1.3"
 $form.Size = New-Object System.Drawing.Size(850, 680)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
@@ -99,14 +98,12 @@ $form.BackColor = "#F4F4F9"
 $grpLive = New-Object System.Windows.Forms.GroupBox
 $grpLive.Text = "Active Game Slots"
 $grpLive.Location = New-Object System.Drawing.Point(15, 15)
-# INCREASED HEIGHT to 550 for better padding
 $grpLive.Size = New-Object System.Drawing.Size(400, 550)
 [void]$form.Controls.Add($grpLive)
 
 $grpArc = New-Object System.Windows.Forms.GroupBox
 $grpArc.Text = "Archive Library (Right-Click for Options)"
 $grpArc.Location = New-Object System.Drawing.Point(430, 15)
-# INCREASED HEIGHT to 550 for better padding
 $grpArc.Size = New-Object System.Drawing.Size(390, 550)
 [void]$form.Controls.Add($grpArc)
 
@@ -132,11 +129,19 @@ $picPreview.BackColor = "#000000"
 [void]$grpArc.Controls.Add($picPreview)
 
 # --- HELPER: GET CLEAN NAME ---
-# Removes the timestamp " | Jan 03..." from the listbox selection to get the real folder name
 function Get-RealName($selection) {
     if (-not $selection) { return $null }
-    # Split by " | " and take the first part
     return ($selection -split " \| ")[0]
+}
+
+# --- HELPER: CHECK IF GAME IS RUNNING ---
+function Test-GameRunning {
+    $proc = Get-Process "DQB2" -ErrorAction SilentlyContinue
+    if ($proc) {
+        [System.Windows.Forms.MessageBox]::Show("Please close Dragon Quest Builders 2 first!`n`nModifying saves while the game is running can corrupt data.", "Game is Running", "OK", "Error")
+        return $true
+    }
+    return $false
 }
 
 # --- LOGIC ---
@@ -206,11 +211,9 @@ function Refresh-UI {
         }
     }
 
-    # REFRESH LISTBOX WITH IMPROVED TIMESTAMPS
     $lstArchive.Items.Clear()
     $dirs = Get-ChildItem -Path $archivePath -Directory | Sort-Object LastWriteTime -Descending
     foreach ($d in $dirs) { 
-        # New Friendly Format: "My Save | Jan 03, 2026 @ 1:16 PM"
         $display = "$($d.Name) | $($d.LastWriteTime.ToString('MMM dd, yyyy @ h:mm tt'))"
         [void]$lstArchive.Items.Add($display) 
     }
@@ -218,6 +221,7 @@ function Refresh-UI {
 }
 
 function Backup-Process($slotName) {
+    if (Test-GameRunning) { return }
     if (-not $slotName) { return }
     $name = [Microsoft.VisualBasic.Interaction]::InputBox("Name this save:", "Backup", "My Save")
     if (-not $name) { return }
@@ -248,6 +252,7 @@ function Backup-Process($slotName) {
 }
 
 function Restore-Process($targetSlot) {
+    if (Test-GameRunning) { return }
     $rawSel = $lstArchive.SelectedItem
     $sel = Get-RealName $rawSel
     if (-not $sel) { return }
@@ -338,7 +343,6 @@ $btnR3 = New-Object System.Windows.Forms.Button; $btnR3.Text="Restore to Slot 3"
 # --- UTILITY BUTTONS ---
 $btnDel = New-Object System.Windows.Forms.Button; $btnDel.Text="X"; $btnDel.ForeColor="Red"; $btnDel.Location=New-Object System.Drawing.Point(340,30); $btnDel.Size=New-Object System.Drawing.Size(35,25); $btnDel.Add_Click({Delete-Archive}); [void]$grpArc.Controls.Add($btnDel)
 
-# 3. UPDATED Location for 'Open Folder' Button (Moved down to 580)
 $btnOpenFolder = New-Object System.Windows.Forms.Button
 $btnOpenFolder.Text = "Open Save Folder"
 $btnOpenFolder.Location = New-Object System.Drawing.Point(430, 580)
